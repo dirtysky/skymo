@@ -8,8 +8,8 @@
 
 /* Max address size we deal with */
 #define OF_MAX_ADDR_CELLS	4
-#define OF_CHECK_ADDR_COUNT(na)	((na) > 0 && (na) <= OF_MAX_ADDR_CELLS)
-#define OF_CHECK_COUNTS(na, ns)	(OF_CHECK_ADDR_COUNT(na) && (ns) > 0)
+#define OF_CHECK_COUNTS(na, ns)	((na) > 0 && (na) <= OF_MAX_ADDR_CELLS && \
+			(ns) > 0)
 
 static struct of_bus *of_match_bus(struct device_node *np);
 static int __of_address_to_resource(struct device_node *dev,
@@ -181,7 +181,7 @@ const __be32 *of_get_pci_address(struct device_node *dev, int bar_no, u64 *size,
 	}
 	bus->count_cells(dev, &na, &ns);
 	of_node_put(parent);
-	if (!OF_CHECK_ADDR_COUNT(na))
+	if (!OF_CHECK_COUNTS(na, ns))
 		return NULL;
 
 	/* Get "reg" or "assigned-addresses" property */
@@ -328,6 +328,21 @@ static struct of_bus *of_match_bus(struct device_node *np)
 	return NULL;
 }
 
+static int of_empty_ranges_quirk(void)
+{
+	if (IS_ENABLED(CONFIG_PPC)) {
+		/* To save cycles, we cache the result */
+		static int quirk_state = -1;
+
+		if (quirk_state < 0)
+			quirk_state =
+				of_machine_is_compatible("Power Macintosh") ||
+				of_machine_is_compatible("MacRISC");
+		return quirk_state;
+	}
+	return false;
+}
+
 static int of_translate_one(struct device_node *parent, struct of_bus *bus,
 			    struct of_bus *pbus, u32 *addr,
 			    int na, int ns, int pna, const char *rprop)
@@ -353,12 +368,10 @@ static int of_translate_one(struct device_node *parent, struct of_bus *bus,
 	 * This code is only enabled on powerpc. --gcl
 	 */
 	ranges = of_get_property(parent, rprop, &rlen);
-#if !defined(CONFIG_PPC)
-	if (ranges == NULL) {
+	if (ranges == NULL && !of_empty_ranges_quirk()) {
 		pr_err("OF: no ranges; cannot translate\n");
 		return 1;
 	}
-#endif /* !defined(CONFIG_PPC) */
 	if (ranges == NULL || rlen == 0) {
 		offset = of_read_number(addr, na);
 		memset(addr, 0, pna * 4);
@@ -489,25 +502,6 @@ u64 of_translate_dma_address(struct device_node *dev, const __be32 *in_addr)
 }
 EXPORT_SYMBOL(of_translate_dma_address);
 
-bool of_can_translate_address(struct device_node *dev)
-{
-	struct device_node *parent;
-	struct of_bus *bus;
-	int na, ns;
-
-	parent = of_get_parent(dev);
-	if (parent == NULL)
-		return false;
-
-	bus = of_match_bus(parent);
-	bus->count_cells(dev, &na, &ns);
-
-	of_node_put(parent);
-
-	return OF_CHECK_COUNTS(na, ns);
-}
-EXPORT_SYMBOL(of_can_translate_address);
-
 const __be32 *of_get_address(struct device_node *dev, int index, u64 *size,
 		    unsigned int *flags)
 {
@@ -524,7 +518,7 @@ const __be32 *of_get_address(struct device_node *dev, int index, u64 *size,
 	bus = of_match_bus(parent);
 	bus->count_cells(dev, &na, &ns);
 	of_node_put(parent);
-	if (!OF_CHECK_ADDR_COUNT(na))
+	if (!OF_CHECK_COUNTS(na, ns))
 		return NULL;
 
 	/* Get "reg" or "assigned-addresses" property */

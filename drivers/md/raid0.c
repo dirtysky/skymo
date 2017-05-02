@@ -278,7 +278,7 @@ abort:
 	kfree(conf->strip_zone);
 	kfree(conf->devlist);
 	kfree(conf);
-	*private_conf = NULL;
+	*private_conf = ERR_PTR(err);
 	return err;
 }
 
@@ -400,7 +400,8 @@ static sector_t raid0_size(struct mddev *mddev, sector_t sectors, int raid_disks
 		  "%s does not support generic reshape\n", __func__);
 
 	rdev_for_each(rdev, mddev)
-		array_sectors += rdev->sectors;
+		array_sectors += (rdev->sectors &
+				  ~(sector_t)(mddev->chunk_sectors-1));
 
 	return array_sectors;
 }
@@ -433,18 +434,18 @@ static int raid0_run(struct mddev *mddev)
 		struct md_rdev *rdev;
 		bool discard_supported = false;
 
-		rdev_for_each(rdev, mddev) {
-			disk_stack_limits(mddev->gendisk, rdev->bdev,
-					  rdev->data_offset << 9);
-			if (blk_queue_discard(bdev_get_queue(rdev->bdev)))
-				discard_supported = true;
-		}
 		blk_queue_max_hw_sectors(mddev->queue, mddev->chunk_sectors);
 
 		blk_queue_io_min(mddev->queue, mddev->chunk_sectors << 9);
 		blk_queue_io_opt(mddev->queue,
 				 (mddev->chunk_sectors << 9) * mddev->raid_disks);
 
+		rdev_for_each(rdev, mddev) {
+			disk_stack_limits(mddev->gendisk, rdev->bdev,
+					  rdev->data_offset << 9);
+			if (blk_queue_discard(bdev_get_queue(rdev->bdev)))
+				discard_supported = true;
+		}
 		if (!discard_supported)
 			queue_flag_clear_unlocked(QUEUE_FLAG_DISCARD, mddev->queue);
 		else
